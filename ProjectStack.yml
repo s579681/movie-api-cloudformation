@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template for setting up RDS::DBInstance and EC2::Instance with default VPC, Subnet, and Security Group provided by AWS.
+
+#The IDs are taken from the default VPC, Subnets and Security groups in the eu-north-1 region (Stockholm)
+
+Parameters:
+  DefaultVPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: The ID of the default VPC
+    Default: vpc-0a1664e780227b0e3
+
+  DefaultPublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: The ID of the default Subnet
+    Default: subnet-08276281919c5548a
+
+  DefaultSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: The ID of the default Security Group
+    Default: sg-05bea39dbfeb564ec
+
+  MyIPAddress:
+    Type: String
+    Description: Public IP address for SSH access
+
+  SecretARN:
+    Type: String
+    Default: arn:aws:secretsmanager:eu-north-1:767398059620:secret:movie/credentials-2CN6XU
+    Description: The ARN of the Secrets Manager secret containing the database credentials  
+
+Resources:
+
+#               <---------------- VPC components ---------------->
+
+  #Private Subnet 1
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref DefaultVPCId
+      CidrBlock: '172.31.48.0/20'
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+  #Private Subnet 2
+  PrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref DefaultVPCId
+      CidrBlock: '172.31.64.0/20'
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [1, !GetAZs '']
+
+  #Elastic IP for the NAT Gateway
+  NatGatewayEIP:
+      Type: 'AWS::EC2::EIP'
+      Properties:
+        Domain: vpc
+
+  #NAT Gateway
+  NatGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref DefaultPublicSubnetId    
+
+  #Route Table for Private Subnets
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref DefaultVPCId  
+   
+  #Route for Private Subnet to NAT Gateway
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGateway
+
+  #Associate Private Subnet1 with Private Route Table
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  #Associate Private Subnet2 with Private Route Table
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable       
+
+#               <---------------- DB components ---------------->
+
+# DB Subnet Group
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: 'DB Subnet Group for movie DB Instance'
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+# DB Security Group
+  PrivateDBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for allowing incoming traffic from EC2 server
+      VpcId: !Ref DefaultVPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref PublicWebServerSecurityGroup
+
+# DB Instance
+  MyDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: moviedb
+      AllocatedStorage: 20
+      DBInstanceClass: db.t3.micro
+      Engine: MySQL
+      MasterUsername: !Sub "{{resolve:secretsmanager:${SecretARN}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${SecretARN}:SecretString:password}}"
+      VPCSecurityGroups:
+        - !Ref PrivateDBSecurityGroup
+      BackupRetentionPeriod: 7
+      PubliclyAccessible: true # Maybe change this to false?
+      MultiAZ: false
+
+
+#               <---------------- EC2 Componenents ---------------->
+
+  PublicWebServerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group allowing SSH acces and HTTP access to web server
+      VpcId: !Ref DefaultVPCId
+      SecurityGroupIngress:
+        # SSH
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MyIPAddress
+        # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+# EC2 Instance
+#TODO          
+
+Outputs:
+  PrivateSubnet1Id:
+    Description: The ID of the first private subnet
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2Id:
+    Description: The ID of the second private subnet
+    Value: !Ref PrivateSubnet2
+
+
+
