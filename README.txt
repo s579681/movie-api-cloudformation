@@ -1,0 +1,2 @@
+This is a CloudFormation file containing creation of resources needed to setup a backend stack for a simple Movie API.
+Resources include, VPC, private and public subnets, security groups, routing tables, NatGateways, DB instance with MySQL and an EC2 with a webserver for hosting the API.
